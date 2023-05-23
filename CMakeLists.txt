@@ -12,7 +12,7 @@ endif()
 
 add_subdirectory(${raylib_location} ${CMAKE_CURRENT_BINARY_DIR}/raylib)
 
-add_executable(bike ${SRC} "src/draw.h")
+add_executable(bike ${SRC} )
 target_include_directories(bike PRIVATE .)
 
 target_link_libraries(bike raylib)

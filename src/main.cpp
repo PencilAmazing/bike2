@@ -1,7 +1,7 @@
 #include "raylib.h"
 #include "raymath.h"
 
-#include <map>
+#include <forward_list>
 #include <tuple>
 
 namespace Game {
@@ -15,9 +15,10 @@ namespace Game {
         };
         Direction direction = Direction::Right;
         // Instead of having a global game grid, we just record where the pawn was
-        // store direction when passing over
-        // list of tuple of (x,y,direction)
-        std::map<std::pair<int, int>, Direction> path;
+        // Direction isn't stored, but could be computed easily
+        std::forward_list<std::pair<int, int>> path;
+        // Goes from 0 to 100
+        int progress = 0;
     };
 
     struct State {
@@ -29,125 +30,150 @@ namespace Game {
 
         int num_pawns = 1;
         Pawn pawns[1];
-        int pawnspeed = 3;
+        int pawnspeed = 4; // Keep this a multiple of two
     };
 
-    void DrawPawnPath(Pawn &pawn, State &state) {
-        auto shift_coord = [](int &x, int &y, Pawn::Direction dir, bool flip = false) {
-            if (dir == Pawn::Right)
-                x -= flip ? -1 : 1;
-            else if (dir == Pawn::Left)
-                x += flip ? -1 : 1;
-            else if (dir == Pawn::Up)
-                y += flip ? -1 : 1;
-            else if (dir == Pawn::Down)
-                y -= flip ? -1 : 1;
-        };
+    std::pair<int, int> GetPawnWorldSpace(Pawn& pawn, int grid_spacing)
+    {
+        int pawn_x = pawn.x * grid_spacing;
+        int pawn_y = pawn.y * grid_spacing;
 
-        auto shift_half = [](float x, float y, Pawn::Direction dir, bool flip = false) -> Vector2 {
-            // Flip dir
-            if (flip) dir = (Pawn::Direction) ((dir + 2) % 4);
-            if (dir == Pawn::Right)
-                x -= 0.5f;
-            else if (dir == Pawn::Left)
-                x += 0.5f;
-            else if (dir == Pawn::Up)
-                y += 0.5f;
-            else if (dir == Pawn::Down)
-                y -= 0.5f;
-            return {x, y};
-        };
-
-        //Draw pawn paths too
-        for (auto &point: pawn.path) {
-            auto &loc = point.first;
-            Pawn::Direction dir = point.second;
-            int x = loc.first;
-            int y = loc.second;
-
-            // step back to get control point
-            int endx = loc.first;
-            int endy = loc.second;
-            shift_coord(endx, endy, dir);
-
-            // copy control
-            int controlx = endx;
-            int controly = endy;
-            // Attempt to find end point if it exists
-            Pawn::Direction other_dir = dir;
-            if (pawn.path.find({endx, endy}) != pawn.path.end()) {
-                other_dir = pawn.path.find({endx, endy})->second;
-                shift_coord(endx, endy, other_dir);
-            };
-
-            // Scale grid coords to world coords
-            Vector2 start = Vector2Scale(shift_half(x, y, dir), state.grid_spacing);
-            Vector2 end = Vector2Scale(shift_half(endx, endy, other_dir, true), state.grid_spacing);
-            Vector2 control = Vector2Scale({(float) controlx, (float) controly}, state.grid_spacing);
-            DrawLineBezierQuad(start, end, control, 5.f, BLUE);
+        switch (pawn.direction) {
+        case Pawn::Up:
+            pawn_y -= (grid_spacing * pawn.progress) / 100;
+            break;
+        case Pawn::Down:
+            pawn_y += (grid_spacing * pawn.progress) / 100;
+            break;
+        case Pawn::Right:
+            pawn_x += (grid_spacing * pawn.progress) / 100;
+            break;
+        case Pawn::Left:
+            pawn_x -= (grid_spacing * pawn.progress) / 100;
+            break;
+        default:
+            break;
         }
-        
-        // Render partial line trail too
-        {
-            // Get source point
-            int lastx = lrint(pawn.x / state.grid_spacing);
-            int lasty = lrint(pawn.y / state.grid_spacing);
-            Vector2 lastpoint = {(float)lastx, (float)lasty};
-
-            int controlx = lastx;
-            int controly = lasty;
-
-            auto prev_point = pawn.path.find({lastx, lasty});
-            if (prev_point != pawn.path.end()) {
-                shift_coord(lastx, lasty, prev_point->second);
-                lastpoint = {(float) lastx, (float) lasty};
-                lastpoint = shift_half(lastpoint.x, lastpoint.y, prev_point->second, true);
-            }
-
-            lastpoint = Vector2Scale(lastpoint, state.grid_spacing);
-            Vector2 control = Vector2Scale({(float) controlx, (float) controly}, state.grid_spacing);
-            DrawLineBezierQuad(lastpoint,
-                               {(float) pawn.x, (float) pawn.y}, // Render to this point
-                               control,
-                               5.f, BLUE);
-        }
+        return { pawn_x, pawn_y };
     }
 
-    void DrawPawn(Pawn &pawn) {
+    // Probably my least favorite function dude
+    void DrawPawnPath(Pawn& pawn, State& state)
+    {
+        if (pawn.path.empty()) return; // bail on empty
 
-        float rotation_LUT[4] = {180, 90, 0, -90};
-        // Draws a square with a triangle pointing in direction
-        // Should be moved to a nicer function
-        DrawRectangle(pawn.x - 10, pawn.y - 10, 20, 20, BLUE);
-        Vector2 v1{0, 16};
-        Vector2 v2{10, 10};
-        Vector2 v3{-10, 10};
+        auto pawn_world = GetPawnWorldSpace(pawn, state.grid_spacing);
+        auto it = pawn.path.cbegin();
+        // Render partial line trail too
+        DrawLineEx({ (float)it->first * state.grid_spacing, (float)it->second * state.grid_spacing }, { (float)pawn_world.first, (float)pawn_world.second }, 5, ORANGE);
+
+        while (it != pawn.path.cend()) {
+            std::pair<int, int> point = *(it);
+
+            auto next_it = std::next(it, 1);
+            if (next_it == pawn.path.cend()) break;
+            std::pair<int, int> next_point = *(next_it);
+
+            DrawLineEx({ (float)state.grid_spacing * point.first,
+                (float)state.grid_spacing * point.second },
+                { (float)state.grid_spacing * next_point.first,
+                  (float)state.grid_spacing * next_point.second }, 5, ORANGE);
+            ++it;
+        }
+
+#ifdef _DEBUG
+        for (auto point : pawn.path) {
+            DrawCircle(point.first * state.grid_spacing, point.second * state.grid_spacing, 3, GREEN);
+        }
+#endif
+    }
+
+    void DrawPawn(Pawn& pawn, int grid_spacing)
+    {
+        auto loc = GetPawnWorldSpace(pawn, grid_spacing);
+        DrawRectangle(loc.first - 10, loc.second - 10, 20, 20, BLUE);
+
+        return;
+        float rotation_LUT[4] = { 180, 90, 0, -90 };
+        Vector2 v1{ 0, 16 };
+        Vector2 v2{ 10, 10 };
+        Vector2 v3{ -10, 10 };
         float angle = DEG2RAD * -rotation_LUT[pawn.direction];
         v1 = Vector2Rotate(v1, angle);
         v2 = Vector2Rotate(v2, angle);
         v3 = Vector2Rotate(v3, angle);
-        v1 = Vector2Add(v1, {pawn.x, pawn.y});
-        v2 = Vector2Add(v2, {pawn.x, pawn.y});
-        v3 = Vector2Add(v3, {pawn.x, pawn.y});
+        v1 = Vector2Add(v1, { pawn.x, pawn.y });
+        v2 = Vector2Add(v2, { pawn.x, pawn.y });
+        v3 = Vector2Add(v3, { pawn.x, pawn.y });
         DrawTriangle(v1, v2, v3, ORANGE);
     }
 
-    void Tick(State &state) {
-        Pawn &pawn = state.pawns[0];
-        auto align = [](float val, int grid) -> float {
-            return (int) (val / grid + 0.5) * grid;
-        };
+    void TranslatePawn(Pawn& pawn, Pawn::Direction dir)
+    {
+        switch (dir) {
+        case Pawn::Up:
+            pawn.y -= 1;
+            break;
+        case Pawn::Down:
+            pawn.y += 1;
+            break;
+        case Pawn::Right:
+            pawn.x += 1;
+            break;
+        case Pawn::Left:
+            pawn.x -= 1;
+            break;
+        default:
+            break;
+        }
+#ifdef _DEBUG
+        TraceLog(LOG_DEBUG, "Translated!");
+#endif
+    }
 
-        auto CanTurn = [](Pawn &p, int grid_spacing, int grid_tolerance) -> bool {
-            int actual_x = (int) ((p.x) + 0.5f);
-            int actual_y = (int) ((p.y) + 0.5f);
-            actual_x = abs(actual_x) % grid_spacing;
-            actual_y = abs(actual_y) % grid_spacing;
-            // try negating actual_x based on direction
-            return (actual_x) < grid_tolerance && (actual_y) < grid_tolerance;
-        };
+    bool TestPointPathIntersect(int pawn_x, int pawn_y, std::forward_list<std::pair<int, int>>& path)
+    {
+        // Test collision with each segment
+        // I don't like C++ iterators man
+        // but forward_list has no size
+        // Also skip first segment, thats still in progress/incomplete and we never collide with that
+        for (auto& it = std::next(path.begin()); it != path.end(); it++) {
+            std::pair<int, int>& point = *it;
+            // or std::advance for C++17
+            auto& next_it = std::next(it, 1);
+            if (next_it == path.end()) break;
+            std::pair<int, int>& next = *next_it;
 
-        if (CanTurn(pawn, state.grid_spacing, state.grid_tolerance)) {
+            int dx = (point.first - next.first);
+            int dy = (point.second - next.second);
+
+            if (dx == 0) {
+                int x = point.first; // constant
+                int min_y = std::min(point.second, next.second);
+                int max_y = std::max(point.second, next.second);
+                // Test vertical
+                if (pawn_y <= max_y && pawn_y >= min_y && pawn_x == point.first)
+                    return true;
+            } else if (dy == 0) {
+                // Test horizontal
+                int y = point.second;
+                int dir = dx < 0 ? -1 : 1;
+                for (int x = 0; x < abs(dx); x++) {
+                    if (y == pawn_y && (dir * x) == pawn_x) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void Tick(State& state)
+    {
+        Pawn& pawn = state.pawns[0];
+
+        // We want to be able to move within 5 pixels of the corner.
+        // Because precise inputs are impossible, we allow some tolerance
+        int dist_to_corner = 100 - pawn.progress;
+        if (abs(dist_to_corner) < state.grid_tolerance) {
             // Don't do a 180 turn and hit the wall
             Pawn::Direction prev_dir = pawn.direction;
             if (IsKeyDown(KEY_W) && pawn.direction != Game::Pawn::Down) {
@@ -159,53 +185,41 @@ namespace Game {
             } else if (IsKeyDown(KEY_D) && pawn.direction != Game::Pawn::Left) {
                 pawn.direction = Game::Pawn::Right;
             };
-            // If we moved, correct grid snap
+
+            // Did we turn around?
             if (prev_dir != pawn.direction) {
-                pawn.x = align(pawn.x, state.grid_spacing);
-                pawn.y = align(pawn.y, state.grid_spacing);
+                // If we moved before we actually hit the corner, adjust
+                if (dist_to_corner >= 0) { // value is positive
+                    Game::TranslatePawn(pawn, prev_dir);
+                    // Round progress to zero
+                    pawn.progress = 0;
+                }
+                // Push current position to stack
+                pawn.path.push_front({ pawn.x, pawn.y });
             }
         }
 
-        // Move pawn in direction
-        if (pawn.direction == Game::Pawn::Down) {
-            pawn.y += state.pawnspeed;
-        }
-        if (pawn.direction == Game::Pawn::Right) {
-            pawn.x += state.pawnspeed;
-        }
-        if (pawn.direction == Game::Pawn::Up) {
-            pawn.y -= state.pawnspeed;
-        }
-        if (pawn.direction == Game::Pawn::Left) {
-            pawn.x -= state.pawnspeed;
+        // Move pawn
+        pawn.progress += state.pawnspeed;
+        if (pawn.progress >= 100) {
+            pawn.progress -= 100;
+            Game::TranslatePawn(pawn, pawn.direction);
         }
 
-        auto grid_pos = [](float x, int grid_spacing) -> int {
-            // multiple of grid spacing
-            int pos = (int) ((x / grid_spacing) + 0.5f);
-            return pos;
-        };
-
-        int actual_x = grid_pos(pawn.x, state.grid_spacing);
-        int actual_y = grid_pos(pawn.y, state.grid_spacing);
-        // Path was never crossed before
-        auto coord = pawn.path.find({actual_x, actual_y});
-        if (coord == pawn.path.end()) {
-            pawn.path[{actual_x, actual_y}] = pawn.direction;
-        } else {
-            // We have crossed this point before, check if it's against us
-            if (coord->second != pawn.direction) {
-                TraceLog(LOG_DEBUG, "Collide!");
-            }
+        if (TestPointPathIntersect(pawn.x, pawn.y, pawn.path)) {
+            TraceLog(LOG_INFO, "COLLIDE!!!");
         }
     }
 
 
-    void Draw(State &state) {
+    void Draw(State& state)
+    {
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        const char *debug_text = TextFormat("FPS %d/60 ", GetFPS());
+#ifdef _DEBUG
+        const char* debug_text = TextFormat("FPS %d/60 ", GetFPS());
         DrawText(debug_text, 190, 200, 20, LIGHTGRAY);
+#endif
         // Draw grid lines
         for (int i = 0; i < state.window_width; i += state.grid_spacing) {
             DrawLine(i, 0, i, state.window_height, BLACK);
@@ -213,24 +227,26 @@ namespace Game {
         for (int j = 0; j < state.window_height; j += state.grid_spacing) {
             DrawLine(0, j, state.window_width, j, BLACK);
         }
-
+        // Draw pawns
         for (int i = 0; i < state.num_pawns; i++) {
             DrawPawnPath(state.pawns[i], state);
-            DrawPawn(state.pawns[i]);
+            DrawPawn(state.pawns[i], state.grid_spacing);
         }
-
         EndDrawing();
     }
 }
 
-int main() {
+int main()
+{
     Game::State state;
+    // Create pawns
     for (int i = 0; i < state.num_pawns; i++) {
-        state.pawns[i].x = state.grid_spacing + state.grid_spacing * i;
-        state.pawns[i].y = state.grid_spacing + state.grid_spacing * i;
+        state.pawns[i].x = 1 + i;
+        state.pawns[i].y = 1 + i;
+        state.pawns[i].path.push_front({ 1 + i, 1 + i });
     }
     SetTraceLogLevel(LOG_DEBUG);
-    InitWindow(state.window_width, state.window_height, "raylib [core] example - basic window");
+    InitWindow(state.window_width, state.window_height, "Bikes");
     SetTargetFPS(60);
     while (!WindowShouldClose()) {
         Game::Tick(state);
@@ -238,6 +254,5 @@ int main() {
     }
 
     CloseWindow();
-
     return 0;
 }
