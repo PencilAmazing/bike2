@@ -19,6 +19,7 @@ namespace Game {
         std::forward_list<std::pair<int, int>> path;
         // Goes from 0 to 100
         int progress = 0;
+        std::pair<int, int> crash_point = { -1,-1 };
     };
 
     struct State {
@@ -92,6 +93,11 @@ namespace Game {
     {
         auto loc = GetPawnWorldSpace(pawn, grid_spacing);
         DrawRectangle(loc.first - 10, loc.second - 10, 20, 20, BLUE);
+#ifdef _DEBUG
+        if (pawn.crash_point.first != -1) {
+            DrawCircle(pawn.crash_point.first * grid_spacing, pawn.crash_point.second * grid_spacing, 5, RED);
+        }
+#endif
 
         return;
         float rotation_LUT[4] = { 180, 90, 0, -90 };
@@ -147,20 +153,22 @@ namespace Game {
             int dx = (point.first - next.first);
             int dy = (point.second - next.second);
 
+            // Right now we're using >= and <=  to detect collision on corners.
+            // Maybe we want some sick corner turns instead?
             if (dx == 0) {
                 int x = point.first; // constant
                 int min_y = std::min(point.second, next.second);
                 int max_y = std::max(point.second, next.second);
                 // Test vertical
-                if (pawn_y <= max_y && pawn_y >= min_y && pawn_x == point.first)
+                if (pawn_y <= max_y && pawn_y >= min_y && pawn_x == x)
                     return true;
             } else if (dy == 0) {
                 // Test horizontal
                 int y = point.second;
-                int dir = dx < 0 ? -1 : 1;
-                for (int x = 0; x < abs(dx); x++) {
-                    if (y == pawn_y && (dir * x) == pawn_x) return true;
-                }
+                int min_x = std::min(point.first, next.first);
+                int max_x = std::max(point.first, next.first);
+                if (pawn_x <= max_x && pawn_x >= min_x && pawn_y == y)
+                    return true;
             }
         }
         return false;
@@ -206,11 +214,12 @@ namespace Game {
             Game::TranslatePawn(pawn, pawn.direction);
         }
 
-        if (TestPointPathIntersect(pawn.x, pawn.y, pawn.path)) {
+        bool already_crashed = (pawn.crash_point.first != -1);
+        if (!already_crashed && TestPointPathIntersect(pawn.x, pawn.y, pawn.path)) {
             TraceLog(LOG_INFO, "COLLIDE!!!");
+            pawn.crash_point = { pawn.x, pawn.y };
         }
     }
-
 
     void Draw(State& state)
     {
